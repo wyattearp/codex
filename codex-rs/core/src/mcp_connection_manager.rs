@@ -17,10 +17,10 @@ use codex_mcp_client::McpClient;
 use mcp_types::ClientCapabilities;
 use mcp_types::Implementation;
 use mcp_types::Tool;
+use rand::distr::Alphanumeric;
 use rand::distr::SampleString;
 use tokio::task::JoinSet;
 use tracing::info;
-use rand::distr::Alphanumeric;
 
 use crate::config_types::McpServerConfig;
 
@@ -44,7 +44,10 @@ fn qualify_tools(tools: Vec<ToolInfo>) -> HashMap<String, ToolInfo> {
     let mut used_names = HashSet::new();
     let mut qualified_tools = HashMap::new();
     for tool in tools {
-        let mut base_name = format!("{}{}{}", tool.server_name, MCP_TOOL_NAME_DELIMITER, tool.tool_name);
+        let mut base_name = format!(
+            "{}{}{}",
+            tool.server_name, MCP_TOOL_NAME_DELIMITER, tool.tool_name
+        );
         if base_name.len() > MAX_TOOL_NAME_LENGTH {
             base_name = base_name[..MAX_TOOL_NAME_LENGTH].to_string();
         }
@@ -52,8 +55,13 @@ fn qualify_tools(tools: Vec<ToolInfo>) -> HashMap<String, ToolInfo> {
         let mut deduplicated_name = base_name.clone();
         while used_names.contains(&deduplicated_name) {
             let random_suffix = Alphanumeric.sample_string(&mut rand::rng(), RANDOM_SUFFIX_LENGTH);
-            let trim_length = std::cmp::min(MAX_TOOL_NAME_LENGTH - RANDOM_SUFFIX_LENGTH, base_name.len());
-            deduplicated_name = format!("{}{}", base_name[..trim_length].to_string(), random_suffix.to_lowercase());
+            let trim_length =
+                std::cmp::min(MAX_TOOL_NAME_LENGTH - RANDOM_SUFFIX_LENGTH, base_name.len());
+            deduplicated_name = format!(
+                "{}{}",
+                base_name[..trim_length].to_string(),
+                random_suffix.to_lowercase()
+            );
         }
 
         used_names.insert(deduplicated_name.clone());
@@ -163,8 +171,12 @@ impl McpConnectionManager {
 
     /// Returns a single map that contains **all** tools. Each key is the
     /// fully-qualified name for the tool.
-    pub fn list_all_tools(&self) -> HashMap<String, Tool> { 
-        return self.tools.iter().map(|(name, tool)| (name.clone(), tool.tool.clone())).collect()
+    pub fn list_all_tools(&self) -> HashMap<String, Tool> {
+        return self
+            .tools
+            .iter()
+            .map(|(name, tool)| (name.clone(), tool.tool.clone()))
+            .collect();
     }
 
     /// Invoke the tool indicated by the (server, tool) pair.
@@ -188,7 +200,10 @@ impl McpConnectionManager {
     }
 
     pub fn parse_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
-        return self.tools.get(tool_name).map(|tool| (tool.server_name.clone(), tool.tool_name.clone()))
+        return self
+            .tools
+            .get(tool_name)
+            .map(|tool| (tool.server_name.clone(), tool.tool_name.clone()));
     }
 }
 
@@ -238,8 +253,6 @@ async fn list_all_tools(
     Ok(aggregated)
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,17 +291,21 @@ mod tests {
 
     #[test]
     fn test_qualify_tools_long_names_trimmed() {
-        let tools = vec![
-            create_test_tool("very_long_server_name_that_exceeds_limits", "very_long_tool_name_that_also_exceeds_limits"),
-        ];
+        let tools = vec![create_test_tool(
+            "very_long_server_name_that_exceeds_limits",
+            "very_long_tool_name_that_also_exceeds_limits",
+        )];
 
         let qualified_tools = qualify_tools(tools);
 
         assert_eq!(qualified_tools.len(), 1);
         let qualified_name = qualified_tools.keys().next().unwrap();
-        
+
         assert_eq!(qualified_name.len(), 64);
-        assert_eq!(qualified_name, "very_long_server_name_that_exceeds_limits__very_long_tool_name_t");
+        assert_eq!(
+            qualified_name,
+            "very_long_server_name_that_exceeds_limits__very_long_tool_name_t"
+        );
     }
 
     #[test]
@@ -301,24 +318,29 @@ mod tests {
         let qualified_tools = qualify_tools(tools);
 
         assert_eq!(qualified_tools.len(), 2);
-        
+
         let mut keys: Vec<_> = qualified_tools.keys().cloned().collect();
         keys.sort();
-        
+
         assert_ne!(keys[0], keys[1]);
-        
+
         assert_eq!(keys[0], "server1__duplicate_tool");
-        
+
         assert!(keys[1].starts_with("server1__duplicate_tool"));
 
         let suffix = &keys[1][23..];
         assert_eq!(suffix.len(), 10);
-        assert!(suffix.chars().all(|c| c.is_alphanumeric() && !c.is_uppercase()));
+        assert!(
+            suffix
+                .chars()
+                .all(|c| c.is_alphanumeric() && !c.is_uppercase())
+        );
     }
 
     #[test]
     fn test_qualify_tools_long_duplicated_names_conflict() {
-        let tool_name = "very_long_tool_name_that_definitely_exceeds_the_maximum_length_of_64_characters";
+        let tool_name =
+            "very_long_tool_name_that_definitely_exceeds_the_maximum_length_of_64_characters";
         let server_name = "server";
 
         let tools = vec![
@@ -329,18 +351,24 @@ mod tests {
         let qualified_tools = qualify_tools(tools);
 
         assert_eq!(qualified_tools.len(), 2);
-        
+
         let mut keys: Vec<_> = qualified_tools.keys().cloned().collect();
         keys.sort();
-        
+
         assert_ne!(keys[0], keys[1]);
-        
-        assert_eq!(keys[0], "server__very_long_tool_name_that_definitely_exceeds_the_maximum_");
+
+        assert_eq!(
+            keys[0],
+            "server__very_long_tool_name_that_definitely_exceeds_the_maximum_"
+        );
         assert!(keys[1].starts_with("server__very_long_tool_name_that_definitely_exceeds_th"));
-        
+
         let suffix = &keys[1][54..];
         assert_eq!(suffix.len(), 10);
-        assert!(suffix.chars().all(|c| c.is_alphanumeric() && !c.is_uppercase()));
+        assert!(
+            suffix
+                .chars()
+                .all(|c| c.is_alphanumeric() && !c.is_uppercase())
+        );
     }
 }
-
