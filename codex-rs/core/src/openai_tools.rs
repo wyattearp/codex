@@ -265,19 +265,21 @@ pub(crate) fn create_tools_json_for_chat_completions_api(
             if tool.get("type") != Some(&serde_json::Value::String("function".to_string())) {
                 return None;
             }
-
-            if let Some(map) = tool.as_object_mut() {
-                // Remove "type" field as it is not needed in chat completions.
-                map.remove("type");
+            
+            // Convert from Responses API format to Chat Completions format
+            if let Some(map) = tool.as_object() {
+                let mut function_map = map.clone();
+                function_map.remove("type");
                 Some(json!({
                     "type": "function",
-                    "function": map,
+                    "function": function_map,
                 }))
             } else {
                 None
             }
         })
-        .collect::<Vec<serde_json::Value>>();
+        .collect();
+
     Ok(tools_json)
 }
 

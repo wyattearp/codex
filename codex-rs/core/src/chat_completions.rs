@@ -15,6 +15,7 @@ use tokio::time::timeout;
 use tracing::debug;
 use tracing::trace;
 
+
 use crate::ModelProviderInfo;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
@@ -110,12 +111,17 @@ pub(crate) async fn stream_chat_completions(
     }
 
     let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
-    let payload = json!({
+    let mut payload = json!({
         "model": model_family.slug,
         "messages": messages,
         "stream": true,
         "tools": tools_json,
     });
+    
+    // Add tool_choice if tools are present to ensure model uses them
+    if !tools_json.is_empty() {
+        payload["tool_choice"] = json!("auto");
+    }
 
     debug!(
         "POST to {}: {}",
@@ -144,6 +150,7 @@ pub(crate) async fn stream_chat_completions(
                     stream,
                     tx_event,
                     provider.stream_idle_timeout(),
+                    provider.name.clone(),
                 ));
                 return Ok(ResponseStream { rx_event });
             }
@@ -187,6 +194,7 @@ async fn process_chat_sse<S>(
     stream: S,
     tx_event: mpsc::Sender<Result<ResponseEvent>>,
     idle_timeout: Duration,
+    provider_name: String,
 ) where
     S: Stream<Item = Result<Bytes>> + Unpin,
 {
@@ -286,6 +294,24 @@ async fn process_chat_sse<S>(
                 .and_then(|d| d.get("content"))
                 .and_then(|c| c.as_str())
             {
+                // Check if this is Ollama and the content looks like a function call
+                if provider_name.to_lowercase() == "ollama" && content.trim_start().starts_with('{') {
+                    // Try to parse as JSON function call
+                    if let Ok(json_content) = serde_json::from_str::<serde_json::Value>(content) {
+                        if let (Some(name), Some(args)) = (
+                            json_content.get("name").and_then(|n| n.as_str()),
+                            json_content.get("arguments")
+                        ) {
+                            // This is an Ollama function call
+                            fn_call_state.active = true;
+                            fn_call_state.name = Some(name.to_string());
+                            fn_call_state.arguments = serde_json::to_string(args).unwrap_or_default();
+                            fn_call_state.call_id = Some(format!("ollama_call_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()));
+                            continue; // Skip regular content processing
+                        }
+                    }
+                }
+
                 if !content.is_empty() {
                     assistant_text.push_str(content);
                     let _ = tx_event
@@ -382,27 +408,41 @@ async fn process_chat_sse<S>(
                         let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                     }
                     "stop" => {
-                        // Regular turn without tool-call. Emit the final assistant message
-                        // as a single OutputItemDone so non-delta consumers see the result.
-                        if !assistant_text.is_empty() {
-                            let item = ResponseItem::Message {
-                                role: "assistant".to_string(),
-                                content: vec![ContentItem::OutputText {
-                                    text: std::mem::take(&mut assistant_text),
-                                }],
+                        // For Ollama, also check if we have an active function call on stop
+                        if fn_call_state.active {
+                            let item = ResponseItem::FunctionCall {
                                 id: None,
+                                name: fn_call_state.name.clone().unwrap_or_else(|| "".to_string()),
+                                arguments: fn_call_state.arguments.clone(),
+                                call_id: fn_call_state.call_id.clone().unwrap_or_else(String::new),
                             };
                             let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
+                        } else {
+                            // Regular turn without tool-call. Emit the final assistant message
+                            // as a single OutputItemDone so non-delta consumers see the result.
+                            if !assistant_text.is_empty() {
+                                let item = ResponseItem::Message {
+                                    role: "assistant".to_string(),
+                                    content: vec![ContentItem::OutputText {
+                                        text: std::mem::take(&mut assistant_text),
+                                    }],
+                                    id: None,
+                                };
+                                let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
+                            }
+                            // Also emit a terminal Reasoning item so UIs can finalize raw reasoning.
+                            if !reasoning_text.is_empty() {
+                                let item = ResponseItem::Reasoning {
+                                    id: String::new(),
+                                    summary: Vec::new(),
+                                    content: Some(vec![ReasoningItemContent::ReasoningText {
+                                        text: std::mem::take(&mut reasoning_text),
+                                    }]),
+                                    encrypted_content: None,
+                                };
+                                let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
+                            }
                         }
-                        // Also emit a terminal Reasoning item so UIs can finalize raw reasoning.
-                        if !reasoning_text.is_empty() {
-                            let item = ResponseItem::Reasoning {
-                                id: String::new(),
-                                summary: Vec::new(),
-                                content: Some(vec![ReasoningItemContent::ReasoningText {
-                                    text: std::mem::take(&mut reasoning_text),
-                                }]),
-                                encrypted_content: None,
                             };
                             let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                         }

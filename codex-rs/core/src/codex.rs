@@ -1760,14 +1760,18 @@ fn parse_container_exec_arguments(
     call_id: &str,
 ) -> Result<ExecParams, Box<ResponseInputItem>> {
     // parse command
+    debug!("Parsing shell arguments: {}", arguments);
     match serde_json::from_str::<ShellToolCallParams>(&arguments) {
-        Ok(shell_tool_call_params) => Ok(to_exec_params(shell_tool_call_params, sess)),
+        Ok(shell_tool_call_params) => {
+            debug!("Parsed shell params: {:?}", shell_tool_call_params);
+            Ok(to_exec_params(shell_tool_call_params, sess))
+        }
         Err(e) => {
             // allow model to re-sample
             let output = ResponseInputItem::FunctionCallOutput {
                 call_id: call_id.to_string(),
                 output: FunctionCallOutputPayload {
-                    content: format!("failed to parse function arguments: {e}"),
+                    content: format!("failed to parse function arguments: {e}\nArguments were: {arguments}"),
                     success: None,
                 },
             };
