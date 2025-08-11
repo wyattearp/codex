@@ -10,7 +10,7 @@ use codex_login::CodexAuth;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::env::VarError;
+
 use std::time::Duration;
 
 use crate::error::EnvVarError;
@@ -183,8 +183,8 @@ impl ModelProviderInfo {
     fn api_key(&self) -> crate::error::Result<Option<String>> {
         match &self.env_key {
             Some(env_key) => {
-                let env_value = if env_key == crate::openai_api_key::OPENAI_API_KEY_ENV_VAR {
-                    get_openai_api_key().map_or_else(|| Err(VarError::NotPresent), Ok)
+                let env_value = if env_key == codex_login::OPENAI_API_KEY_ENV_VAR {
+                    std::env::var(env_key)
                 } else {
                     std::env::var(env_key)
                 };
@@ -193,16 +193,11 @@ impl ModelProviderInfo {
                     _ => {
                         // For OpenAI provider, missing API key is still an error
                         // For other providers, missing API key is allowed (e.g., local providers)
-                        if env_key == crate::openai_api_key::OPENAI_API_KEY_ENV_VAR {
+                        if env_key == codex_login::OPENAI_API_KEY_ENV_VAR {
                             Err(crate::error::CodexErr::EnvVar(EnvVarError {
                                 var: env_key.clone(),
                                 instructions: self.env_key_instructions.clone(),
                             }))
-                        } else {
-                            Ok(None)
-                        }
-                    }
-                }
                         } else {
                             Ok(None)
                         }
@@ -423,12 +418,12 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         assert_eq!(expected_provider, provider);
     }
 
-    #[test]
-    fn test_non_openai_provider_works_without_api_key() {
+    #[tokio::test]
+    async fn test_non_openai_provider_works_without_api_key() {
         // Test that non-OpenAI providers work even when their env_key is not set
         let ollama_provider = ModelProviderInfo {
             name: "Ollama".to_string(),
-            base_url: "http://localhost:11434/v1".to_string(),
+            base_url: Some("http://localhost:11434/v1".to_string()),
             env_key: Some("NONEXISTENT_API_KEY".to_string()),
             env_key_instructions: None,
             wire_api: WireApi::Chat,
@@ -438,6 +433,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
         };
 
         // Ensure the env var is not set
@@ -446,18 +442,18 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         }
 
         let client = reqwest::Client::new();
-        let result = ollama_provider.create_request_builder(&client);
+        let result = ollama_provider.create_request_builder(&client, &None).await;
         
         // Should succeed even without the API key
         assert!(result.is_ok(), "Non-OpenAI provider should work without API key");
     }
 
-    #[test]
-    fn test_openai_provider_requires_api_key() {
+    #[tokio::test]
+    async fn test_openai_provider_requires_api_key() {
         // Test that OpenAI provider still requires API key
         let openai_provider = ModelProviderInfo {
             name: "OpenAI".to_string(),
-            base_url: "https://api.openai.com/v1".to_string(),
+            base_url: Some("https://api.openai.com/v1".to_string()),
             env_key: Some("OPENAI_API_KEY".to_string()),
             env_key_instructions: Some("Create an API key".to_string()),
             wire_api: WireApi::Responses,
@@ -467,6 +463,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
+            requires_openai_auth: true,
         };
 
         // Ensure OPENAI_API_KEY is not set for this test
@@ -476,7 +473,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         }
 
         let client = reqwest::Client::new();
-        let result = openai_provider.create_request_builder(&client);
+        let result = openai_provider.create_request_builder(&client, &None).await;
         
         // Should fail without the API key
         assert!(result.is_err(), "OpenAI provider should require API key");
@@ -489,12 +486,12 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         }
     }
 
-    #[test]
-    fn test_provider_with_valid_api_key_works() {
+    #[tokio::test]
+    async fn test_provider_with_valid_api_key_works() {
         // Test that providers work when API key is provided
         let provider = ModelProviderInfo {
             name: "Test".to_string(),
-            base_url: "https://api.test.com/v1".to_string(),
+            base_url: Some("https://api.test.com/v1".to_string()),
             env_key: Some("TEST_API_KEY".to_string()),
             env_key_instructions: None,
             wire_api: WireApi::Chat,
@@ -504,6 +501,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
         };
 
         // Set the API key
@@ -512,7 +510,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         }
 
         let client = reqwest::Client::new();
-        let result = provider.create_request_builder(&client);
+        let result = provider.create_request_builder(&client, &None).await;
         
         // Should succeed with the API key
         assert!(result.is_ok(), "Provider should work with valid API key");
@@ -523,12 +521,12 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         }
     }
 
-    #[test]
-    fn test_provider_without_env_key_works() {
+    #[tokio::test]
+    async fn test_provider_without_env_key_works() {
         // Test that providers without env_key work
         let provider = ModelProviderInfo {
             name: "Local".to_string(),
-            base_url: "http://localhost:8080/v1".to_string(),
+            base_url: Some("http://localhost:8080/v1".to_string()),
             env_key: None,
             env_key_instructions: None,
             wire_api: WireApi::Chat,
@@ -538,10 +536,11 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
         };
 
         let client = reqwest::Client::new();
-        let result = provider.create_request_builder(&client);
+        let result = provider.create_request_builder(&client, &None).await;
         
         // Should succeed without any API key requirement
         assert!(result.is_ok(), "Provider without env_key should work");

@@ -261,7 +261,7 @@ pub(crate) fn create_tools_json_for_chat_completions_api(
     let responses_api_tools_json = create_tools_json_for_responses_api(tools)?;
     let tools_json = responses_api_tools_json
         .into_iter()
-        .filter_map(|mut tool| {
+        .filter_map(|tool| {
             if tool.get("type") != Some(&serde_json::Value::String("function".to_string())) {
                 return None;
             }

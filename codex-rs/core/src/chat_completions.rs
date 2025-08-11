@@ -443,9 +443,6 @@ async fn process_chat_sse<S>(
                                 let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                             }
                         }
-                            };
-                            let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
-                        }
                     }
                     _ => {}
                 }
